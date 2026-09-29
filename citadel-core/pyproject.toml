@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uql-omniversal-compiler"
+version = "1.0.0"
+description = "Verified cryptographic and quantum compiler mechanisms for UQL."
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=47,<52",
+  "cirq-core>=1.5,<2",
+  "qiskit>=2.5,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[tool.setuptools]
+packages = ["uql_compiler"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
