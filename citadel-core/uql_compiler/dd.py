@@ -1,9 +1,10 @@
-"""Coherence-aware dynamical decoupling for Qiskit 2.x.
+"""Coherence-aware dynamical-decoupling scheduling for Qiskit 2.x.
 
-The pass operates on a scheduled circuit and inserts timed DD gates into idle
-windows. T1/T2 values influence the minimum idle window selected for DD and the
-sequence spacing; the backend ultimately maps gates to calibrated microwave
-pulses.
+The compiler inserts timed refocusing gates into real idle windows after
+scheduling. Gate durations are explicit so the resulting timing is auditable.
+A backend's calibrated Target/InstructionDurations should be supplied for
+hardware execution; the local profile exists for deterministic simulation and
+testing.
 """
 
 from __future__ import annotations
@@ -13,9 +14,8 @@ import math
 
 from qiskit.circuit import QuantumCircuit
 from qiskit.circuit.library import XGate
-from qiskit.transpiler import PassManager
+from qiskit.transpiler import InstructionDurations, PassManager
 from qiskit.transpiler.passes import ALAPScheduleAnalysis, PadDynamicalDecoupling
-from qiskit.transpiler import InstructionDurations
 
 
 @dataclass(frozen=True)
@@ -31,16 +31,26 @@ class CoherenceModel:
     def effective_coherence_us(self) -> float:
         return min(self.t1_us, self.t2_us)
 
+    def survival_fraction(self, idle_us: float) -> float:
+        if idle_us < 0:
+            raise ValueError("idle_us must be non-negative")
+        return math.exp(-idle_us / self.effective_coherence_us)
+
 
 @dataclass(frozen=True)
 class DDConfig:
     dt_ns: float = 0.222
     x_pulse_dt: int = 160
     min_idle_ratio: float = 2.0
+    pulse_budget_fraction: float = 0.10
 
     def __post_init__(self) -> None:
-        if self.dt_ns <= 0 or self.x_pulse_dt <= 0 or self.min_idle_ratio < 1:
+        if self.dt_ns <= 0 or self.x_pulse_dt <= 0:
             raise ValueError("invalid DD timing configuration")
+        if self.min_idle_ratio < 1:
+            raise ValueError("min_idle_ratio must be >= 1")
+        if not 0 < self.pulse_budget_fraction <= 1:
+            raise ValueError("pulse_budget_fraction must be in (0, 1]")
 
 
 def uhrig_spacings(pulse_count: int) -> tuple[float, ...]:
@@ -62,35 +72,36 @@ def build_dd_pass_manager(
     *,
     config: DDConfig = DDConfig(),
     pulse_count: int = 2,
+    durations: InstructionDurations | None = None,
 ) -> PassManager:
-    """Create a scheduled, timed DD pass manager.
-
-    The coherence model is used to reject sequences whose total pulse duration
-    would consume a disproportionate fraction of the shortest coherence time.
-    """
     if pulse_count != 2:
-        raise ValueError("this production profile currently uses an XX sequence")
-    pulse_us = config.x_pulse_dt * config.dt_ns / 1000.0
-    if 2 * pulse_us > coherence.effective_coherence_us * 0.1:
-        raise ValueError("DD pulse budget exceeds 10% of effective coherence time")
+        raise ValueError("this profile currently uses a balanced XX sequence")
 
-    durations = InstructionDurations([
-        ("x", config.x_pulse_dt),
-        ("measure", max(1, config.x_pulse_dt)),
-        ("reset", max(1, config.x_pulse_dt)),
-        ("cx", 2 * config.x_pulse_dt),
+    pulse_us = config.x_pulse_dt * config.dt_ns / 1000.0
+    if pulse_count * pulse_us > coherence.effective_coherence_us * config.pulse_budget_fraction:
+        raise ValueError("DD pulse budget exceeds configured coherence budget")
+
+    if durations is None:
+        durations = InstructionDurations(
+            [
+                ("h", None, 80),
+                ("x", None, config.x_pulse_dt),
+                ("measure", None, max(1, config.x_pulse_dt)),
+                ("reset", None, max(1, config.x_pulse_dt)),
+                ("cx", None, 2 * config.x_pulse_dt),
+            ],
+            dt=config.dt_ns * 1e-9,
+        )
+
+    return PassManager([
+        ALAPScheduleAnalysis(durations),
+        PadDynamicalDecoupling(
+            durations,
+            [XGate(), XGate()],
+            spacings=uhrig_spacings(pulse_count),
+            sequence_min_length_ratios=config.min_idle_ratio,
+        ),
     ])
-    return PassManager(
-        [
-            ALAPScheduleAnalysis(durations),
-            PadDynamicalDecoupling(
-                durations,
-                [XGate(), XGate()],
-                spacings=uhrig_spacings(pulse_count),
-                sequence_min_length_ratios=config.min_idle_ratio,
-            ),
-        ]
-    )
 
 
 def apply_dynamical_decoupling(
@@ -98,6 +109,8 @@ def apply_dynamical_decoupling(
     coherence: CoherenceModel,
     *,
     config: DDConfig = DDConfig(),
+    durations: InstructionDurations | None = None,
 ) -> QuantumCircuit:
-    """Return a scheduled circuit with coherence-aware DD inserted."""
-    return build_dd_pass_manager(coherence, config=config).run(circuit)
+    return build_dd_pass_manager(
+        coherence, config=config, durations=durations
+    ).run(circuit)
