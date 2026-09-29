@@ -1,4 +1,4 @@
-# PROJECT QUA'LU THE'LO — Phase 5: The Labyrinth
+# PROJECT QUA'LA THE'LO — Phase 5: The Labyrinth
 
 This repository establishes the compartmentalized architecture described in the Grandmaster Codex.
 
