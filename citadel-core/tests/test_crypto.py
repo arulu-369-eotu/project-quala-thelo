@@ -1,32 +1,29 @@
-import pytest
+from uql_compiler.crypto import HybridKeyExchange,HybridRecipient,HybridCiphertext
 
-pytest.importorskip("cryptography")
-
-from uql_compiler.crypto import HybridCiphertext, HybridKeyExchange, HybridRecipient
-
-
-def test_hybrid_key_agreement():
-    recipient = HybridRecipient.generate()
-    ciphertext, initiator_secret = HybridKeyExchange.encapsulate(
-        recipient.x25519_public_bytes,
-        recipient.mlkem_public_bytes,
-        context=b"test",
-    )
-    recipient_secret = recipient.decapsulate(ciphertext, context=b"test")
-    assert initiator_secret == recipient_secret
-    assert len(initiator_secret) == 64
-    assert HybridCiphertext.parse(ciphertext.serialize()) == ciphertext
-
+def test_native_hybrid_key_agreement():
+    recipient=HybridRecipient.generate()
+    a=b=None
+    try:
+        ct,a=HybridKeyExchange.encapsulate_bundle(recipient.public_bundle(),context=b"test")
+        b=recipient.decapsulate(ct,context=b"test")
+        assert a.same_as(b)
+        assert a.pointer != 0
+        assert HybridCiphertext.parse(ct.serialize())==ct
+    finally:
+        if a:a.close()
+        if b:b.close()
+        recipient._native.close()
 
 def test_context_binds_key():
-    recipient = HybridRecipient.generate()
-    ciphertext, key = HybridKeyExchange.encapsulate(
-        recipient.x25519_public_bytes, recipient.mlkem_public_bytes, context=b"a"
-    )
-    assert key != recipient.decapsulate(ciphertext, context=b"b")
-
-
-def test_bundle_encapsulation_matches_recipient():
-    recipient = HybridRecipient.generate()
-    ciphertext, key = HybridKeyExchange.encapsulate_bundle(recipient.public_bundle())
-    assert key == recipient.decapsulate(ciphertext)
+    recipient=HybridRecipient.generate()
+    a=b=c=None
+    try:
+        ct,a=HybridKeyExchange.encapsulate_bundle(recipient.public_bundle(),context=b"a")
+        b=recipient.decapsulate(ct,context=b"a")
+        c=recipient.decapsulate(ct,context=b"b")
+        assert a.same_as(b)
+        assert not a.same_as(c)
+    finally:
+        for s in (a,b,c):
+            if s:s.close()
+        recipient._native.close()

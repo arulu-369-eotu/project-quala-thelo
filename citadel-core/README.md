@@ -1,40 +1,26 @@
 # UQL Omniversal Compiler
 
-The UQL compiler is split into two deliberate layers:
+## Native cryptographic enclave
 
-1. **Architecture declarations** — names, interfaces, and intended security
-   properties.
-2. **Verified mechanisms** — executable cryptographic, memory, QEC, and
-   scheduling implementations with tests.
+The hybrid cryptographic path is native-only:
 
-This separation is foundational: declarations never substitute for evidence.
+- OpenSSL 3.5+ generates X25519 and ML-KEM-1024 private keys.
+- Private key material remains in native OpenSSL objects.
+- X25519, ML-KEM-1024, and HKDF-SHA-512 execute through native OpenSSL EVP APIs.
+- The derived 64-byte hybrid secret is allocated outside Python, page-aligned, mlock'ed, and marked MADV_DONTDUMP.
+- Python receives only an opaque native pointer for secret material.
+- No secret export method exists on NativeSecret; equality is performed in native memory with CRYPTO_memcmp.
+- The Linux native lockdown path fails closed if mlock or MADV_DONTDUMP cannot be established.
 
-## Implemented mechanisms
+Public keys and ciphertexts are ordinary Python byte strings because they are not secret key material.
 
-- X25519 + FIPS 203 ML-KEM-1024 hybrid key establishment with HKDF-SHA-512.
-- OS-backed secret-memory locking with explicit capability reporting.
-- Planar rotated surface-code syndrome extraction using the [[d^2, 1, d]]
-  family for odd distance.
-- Coherence-aware Qiskit dynamical-decoupling scheduling.
+## Architectural boundary
 
-## Security boundaries
-
-The memory layer is intentionally **best effort**. Python's object model can
-create copies outside a locked buffer, and OS page locking is not a proof
-against every privileged-memory or cold-boot acquisition technique.
-
-The quantum layer constructs and schedules physical circuits. It does not
-claim a decoder, logical-error threshold, calibrated hardware fidelity, or
-fault-tolerance certification without those components and measurements.
-
-For hardware DD execution, provide backend-derived instruction durations;
-fabricated timing constants are never presented as hardware calibration.
+Architecture declarations remain separate from executable mechanisms. Claims are made only where the implementation can enforce them.
 
 ## Verification
-
-Install and run:
 
     python -m pip install -e '.[test]'
     python -m pytest -q
 
-CI tests the package on Python 3.11, 3.12, and 3.13.
+The native cryptographic subsystem requires OpenSSL 3.5+ on Linux.

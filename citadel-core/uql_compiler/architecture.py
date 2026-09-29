@@ -1,12 +1,9 @@
 """Declarative architecture layer.
 
-Declarations describe what the compiler intends to provide. They do not claim
-that an implementation is verified until the concrete mechanism modules pass
-their tests and runtime capability checks.
+Declarations describe intent. A mechanism is considered verified only after
+its concrete implementation and tests establish the declared behavior.
 """
-
 from dataclasses import dataclass, field
-
 
 @dataclass(frozen=True)
 class ArchitectureDeclaration:
@@ -15,30 +12,28 @@ class ArchitectureDeclaration:
     mechanisms: tuple[str, ...]
     security_properties: tuple[str, ...]
 
-
 @dataclass(frozen=True)
 class CompilerManifest:
     architecture: ArchitectureDeclaration
     verified_mechanisms: tuple[str, ...] = field(default_factory=tuple)
-
     def is_verified(self, mechanism: str) -> bool:
         return mechanism in self.verified_mechanisms
 
-
 DEFAULT_ARCHITECTURE = ArchitectureDeclaration(
     name="UQL Omniversal Compiler",
-    version="1.0.0",
+    version="1.1.0",
     mechanisms=(
-        "X25519",
-        "ML-KEM-1024",
-        "HKDF-SHA-512",
-        "OS-backed secret-memory locking",
+        "native OpenSSL X25519",
+        "native OpenSSL ML-KEM-1024",
+        "native OpenSSL HKDF-SHA-512",
+        "native page-aligned mlock/MADV_DONTDUMP secret enclave",
         "surface-code syndrome extraction",
         "coherence-aware dynamical decoupling",
     ),
     security_properties=(
         "hybrid classical/post-quantum key establishment",
-        "explicit memory-lock capability reporting",
+        "pointer-only native secret handles",
+        "fail-closed kernel memory lockdown",
         "repeated stabilizer syndrome extraction",
         "hardware-aware idle-time pulse scheduling",
     ),
