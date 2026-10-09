@@ -29,10 +29,9 @@ class NativeSecret:
         if C.mlock(p,page)!=0: C.free(p); fail("mlock")
         if C.madvise(p,page,16)!=0: C.munlock(p,page); C.free(p); fail("MADV_DONTDUMP")
         C.memset(p,0,page); return cls(p.value)
-    @property
-    def pointer(self):
+    def _kdf_output_address(self):
         if self._closed: raise RuntimeError("secret closed")
-        return int(self._p.value)
+        return self._p
     def same_as(self,other):
         return isinstance(other,NativeSecret) and not self._closed and not other._closed and CMP(self._p,other._p,self._size)==0
     def close(self):
@@ -92,7 +91,7 @@ def _hkdf(x,k,transcript):
     try:
         ps=(_P*5)(); ps[0]=PU(b"mode",b"EXTRACT_AND_EXPAND",0); ps[1]=PU(b"digest",b"SHA512",0); ps[2]=PO(b"key",ikm,64); ps[3]=PO(b"info",ib,len(info)); ps[4]=PE()
         s=NativeSecret.allocate()
-        if KD(c,s.pointer,64,ps)<=0:s.close();fail("HKDF")
+        if KD(c,s._kdf_output_address(),64,ps)<=0:s.close();fail("HKDF")
         return s
     finally:
         C.memset(ikm,0,64)
