@@ -9,6 +9,8 @@ def bind(n,r,*a):
     f=getattr(L,n); f.restype=r; f.argtypes=list(a); return f
 Q=bind("EVP_PKEY_Q_keygen",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p); PF=bind("EVP_PKEY_free",None,ctypes.c_void_p)
 PUB=bind("EVP_PKEY_get_raw_public_key",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t)); RAW=bind("EVP_PKEY_new_raw_public_key_ex",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+NEWCTX=bind("EVP_PKEY_CTX_new_from_name",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p,ctypes.c_char_p)
+KGI=bind("EVP_PKEY_keygen_init",ctypes.c_int,ctypes.c_void_p); KG=bind("EVP_PKEY_keygen",ctypes.c_int,ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p))
 CTX=bind("EVP_PKEY_CTX_new",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p); CF=bind("EVP_PKEY_CTX_free",None,ctypes.c_void_p)
 DI=bind("EVP_PKEY_derive_init",ctypes.c_int,ctypes.c_void_p); DP=bind("EVP_PKEY_derive_set_peer",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p); DV=bind("EVP_PKEY_derive",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t))
 EI=bind("EVP_PKEY_encapsulate_init",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p); EV=bind("EVP_PKEY_encapsulate",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t))
@@ -18,6 +20,14 @@ KD=bind("EVP_KDF_derive",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_s
 C.posix_memalign.restype=ctypes.c_int; C.posix_memalign.argtypes=[ctypes.POINTER(ctypes.c_void_p),ctypes.c_size_t,ctypes.c_size_t]; C.free.restype=None; C.free.argtypes=[ctypes.c_void_p]
 C.mlock.restype=ctypes.c_int; C.mlock.argtypes=[ctypes.c_void_p,ctypes.c_size_t]; C.munlock.restype=ctypes.c_int; C.munlock.argtypes=[ctypes.c_void_p,ctypes.c_size_t]; C.madvise.restype=ctypes.c_int; C.madvise.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int]; C.memset.restype=ctypes.c_void_p; C.memset.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_size_t]
 def fail(s): raise RuntimeError("native cryptographic operation failed: "+s)
+def _new_mlkem_key():
+    ctx=NEWCTX(None,b"ML-KEM-1024",None)
+    if not ctx: fail("ML-KEM-1024 unavailable: requires OpenSSL 3.5+")
+    key=ctypes.c_void_p()
+    try:
+        if KGI(ctx)<=0 or KG(ctx,ctypes.byref(key))<=0 or not key.value: fail("ML-KEM-1024 generation")
+        return key.value
+    finally: CF(ctx)
 class NativeSecret:
     __slots__=("_p","_size","_closed")
     def __init__(self,p,size=64): self._p=ctypes.c_void_p(p); self._size=size; self._closed=False
@@ -48,7 +58,7 @@ class NativeKeyPair:
     _k:int
     @classmethod
     def generate(cls):
-        x=Q(None,None,b"X25519"); k=Q(None,None,b"ML-KEM-1024")
+        x=Q(None,None,b"X25519"); k=_new_mlkem_key()
         if not x or not k: PF(x); PF(k); fail("key generation")
         return cls(x,k)
     def public_bundle(self):
