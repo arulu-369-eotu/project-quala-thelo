@@ -80,18 +80,23 @@ def _hkdf(x,k,transcript):
     # transcript before HKDF rather than truncating it or exceeding EVP limits.
     # Domain separation and explicit lengths avoid ambiguous concatenations.
     if type(transcript) is not bytes or len(transcript)>8192:
+        C.memset(ikm,0,64)
         raise ValueError("invalid transcript")
     info=b"UQL-HYBRID-X25519-MLKEM1024-v2\x00"+hashlib.sha512(
         b"UQL-HYBRID-TRANSCRIPT-v2\x00"+len(transcript).to_bytes(4,"big")+transcript
     ).digest()
     ib=ctypes.create_string_buffer(info); h=KF(None,b"HKDF",None); c=KCN(h); KFF(h)
-    if not c:fail("HKDF context")
+    if not c:
+        C.memset(ikm,0,64)
+        fail("HKDF context")
     try:
         ps=(_P*5)(); ps[0]=PU(b"mode",b"EXTRACT_AND_EXPAND",0); ps[1]=PU(b"digest",b"SHA512",0); ps[2]=PO(b"key",ikm,64); ps[3]=PO(b"info",ib,len(info)); ps[4]=PE()
         s=NativeSecret.allocate()
         if KD(c,s.pointer,64,ps)<=0:s.close();fail("HKDF")
-        C.memset(ikm,0,64); return s
-    finally:KCF(c)
+        return s
+    finally:
+        C.memset(ikm,0,64)
+        KCF(c)
 def encapsulate(bundle,context=b""):
     if len(bundle)!=1600:raise ValueError("invalid hybrid public-key bundle")
     if type(context) is not bytes or len(context)>4096:raise ValueError("invalid hybrid context")
@@ -109,7 +114,11 @@ def encapsulate(bundle,context=b""):
         if PUB(eph,pb,ctypes.byref(pn))<=0:fail("ephemeral public key")
         ciphertext=pb.raw+ct.raw
         return ciphertext,_hkdf(xs,ms,bundle+ciphertext+context)
-    finally:CF(xc);CF(kc);PF(xp);PF(kp);PF(eph)
+    finally:
+        for name in ("xs","ms"):
+            buf=locals().get(name)
+            if buf is not None: C.memset(buf,0,ctypes.sizeof(buf))
+        CF(xc);CF(kc);PF(xp);PF(kp);PF(eph)
 def decapsulate(kp,ciphertext,context=b""):
     if len(ciphertext)!=1600:raise ValueError("invalid hybrid ciphertext")
     if type(context) is not bytes or len(context)>4096:raise ValueError("invalid hybrid context")
@@ -119,4 +128,7 @@ def decapsulate(kp,ciphertext,context=b""):
         ct=ctypes.create_string_buffer(ciphertext[32:]); ms=ctypes.create_string_buffer(32); n=ctypes.c_size_t(32)
         if KV(kc,ms,ctypes.byref(n),ct,1568)<=0 or n.value!=32:fail("ML-KEM decapsulation")
         return _hkdf(xs,ms,kp.public_bundle()+ciphertext+context)
-    finally:CF(kc)
+    finally:
+        for buf in (xs, locals().get("ms")):
+            if buf is not None: C.memset(buf,0,ctypes.sizeof(buf))
+        CF(kc)
