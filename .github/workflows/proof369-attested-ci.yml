@@ -20,8 +20,8 @@ jobs:
   measurable-ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
       - name: Install passport dependencies
@@ -41,12 +41,12 @@ jobs:
             --output artifacts/proof369-ci.json
       - name: Publish authenticated GitHub provenance
         if: ${{ always() && steps.evidence.outcome == 'success' }}
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: artifacts/proof369-ci.json
       - name: Preserve report for an independent verifier
         if: ${{ always() && steps.evidence.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: proof369-ci-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/proof369-ci.json
