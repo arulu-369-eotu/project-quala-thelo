@@ -197,3 +197,34 @@ def test_witness_detects_corrupted_own_database(tmp_path):
             store.witness(evidence, now=NOW)
     finally:
         store.close()
+
+
+def test_relying_party_challenge_and_audience_are_cryptographically_bound(tmp_path):
+    path, _, evidence, receipts, verifier, akey, *_ = sample(tmp_path)
+    signed = verifier.admit(
+        evidence, receipts[:2], path, audience="procurement",
+        client_challenge=b"z" * 32, now=NOW,
+        github_options={"runner": mock_sigstore_cli},
+    )
+    with pytest.raises(TrustError):
+        verify_assurance_receipt(
+            signed, akey.public_key(), expected_audience="procurement",
+            expected_challenge=b"x" * 32,
+        )
+    with pytest.raises(TrustError):
+        verify_assurance_receipt(
+            signed, akey.public_key(), expected_audience="healthcare",
+            expected_challenge=b"z" * 32,
+        )
+    with pytest.raises(TrustError):
+        verifier.admit(
+            evidence, receipts[:2], path, audience="healthcare",
+            client_challenge=b"z" * 32, now=NOW,
+            github_options={"runner": mock_sigstore_cli},
+        )
+    with pytest.raises(TrustError):
+        verifier.admit(
+            evidence, receipts[:2], path, audience="procurement",
+            client_challenge=b"x", now=NOW,
+            github_options={"runner": mock_sigstore_cli},
+        )
