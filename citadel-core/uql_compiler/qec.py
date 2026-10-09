@@ -34,8 +34,8 @@ class SurfaceCode:
     """A planar rotated surface-code patch encoding one logical qubit."""
 
     def __init__(self, distance: int = 3):
-        if distance < 3 or distance % 2 == 0:
-            raise ValueError("distance must be an odd integer >= 3")
+        if type(distance) is not int or not 3 <= distance <= 31 or distance % 2 == 0:
+            raise ValueError("distance must be an odd integer in 3..31")
         self.distance = distance
         self.data_coords = tuple((r, c) for r in range(distance) for c in range(distance))
         self.x_checks = self._checks("X")
@@ -65,9 +65,9 @@ class SurfaceCode:
                     kind, ((r, self.distance - 1), (r + 1, self.distance - 1))
                 ))
         else:
-            for c in range(0, self.distance - 1, 2):
-                checks.append(Stabilizer(kind, ((0, c), (0, c + 1))))
             for c in range(1, self.distance - 1, 2):
+                checks.append(Stabilizer(kind, ((0, c), (0, c + 1))))
+            for c in range(0, self.distance - 1, 2):
                 checks.append(Stabilizer(
                     kind, ((self.distance - 1, c), (self.distance - 1, c + 1))
                 ))
@@ -87,10 +87,10 @@ class SurfaceCode:
         return (self.num_data_qubits, 1, self.distance)
 
     def logical_x(self) -> tuple[tuple[int, int], ...]:
-        return tuple((r, self.distance // 2) for r in range(self.distance))
+        return tuple((self.distance // 2, c) for c in range(self.distance))
 
     def logical_z(self) -> tuple[tuple[int, int], ...]:
-        return tuple((self.distance // 2, c) for c in range(self.distance))
+        return tuple((r, self.distance // 2) for r in range(self.distance))
 
     def validate(self) -> None:
         if len(self.x_checks) != len(self.z_checks):
@@ -101,6 +101,11 @@ class SurfaceCode:
                     raise RuntimeError("X/Z stabilizers do not commute")
         if len(self.logical_x()) != self.distance or len(self.logical_z()) != self.distance:
             raise RuntimeError("logical operators have incorrect distance")
+        for checks, logical in ((self.z_checks, self.logical_x()), (self.x_checks, self.logical_z())):
+            if any(len(set(check.data) & set(logical)) % 2 for check in checks):
+                raise RuntimeError("logical operator anticommutes with stabilizer")
+        if len(set(self.logical_x()) & set(self.logical_z())) % 2 != 1:
+            raise RuntimeError("logical X/Z must anticommute")
 
     def _qubits(self):
         data = {coord: cirq.GridQubit(*coord) for coord in self.data_coords}
@@ -111,8 +116,8 @@ class SurfaceCode:
         return data, anc
 
     def build_circuit(self, rounds: int = 1) -> cirq.Circuit:
-        if rounds < 1:
-            raise ValueError("rounds must be >= 1")
+        if type(rounds) is not int or not 1 <= rounds <= 1000:
+            raise ValueError("rounds must be an integer in 1..1000")
         self.validate()
         data, anc = self._qubits()
         circuit = cirq.Circuit()
@@ -133,8 +138,8 @@ class SurfaceCode:
         return circuit
 
     def syndrome_keys(self, rounds: int) -> tuple[str, ...]:
-        if rounds < 1:
-            raise ValueError("rounds must be >= 1")
+        if type(rounds) is not int or not 1 <= rounds <= 1000:
+            raise ValueError("rounds must be an integer in 1..1000")
         return tuple(
             f"{check.kind}_{index}_r{round_index}"
             for round_index in range(rounds)

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quala-trust-exchange"
+version = "0.2.0"
+description = "Tenant-scoped evidence attestations, one-time decisions and signed audit receipts"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=50.0.2,<52"]
+
+[project.scripts]
+abraxas-verifier = "quala_trust.worker:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

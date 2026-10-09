@@ -1,114 +1,352 @@
-"""Native OpenSSL enclave: private keys and derived secrets never enter Python byte storage."""
+"""OpenSSL hybrid key establishment using locked anonymous working pages.
+
+Process memory protection is not a hardware enclave. OpenSSL owns private key
+objects; their provider memory is not guaranteed to be locked by this module.
+The custom v2 combiner requires independent protocol review before production.
+"""
 from __future__ import annotations
-import ctypes, ctypes.util, mmap, platform
-from dataclasses import dataclass
+
+import ctypes
+import ctypes.util
+import hashlib
+import mmap
+import os
+import platform
+import threading
+
+MAX_CONTEXT_BYTES = 4096
+PUBLIC_BUNDLE_BYTES = CIPHERTEXT_BYTES = 1600
+KDF_DOMAIN = b"UQL-HYBRID-X25519-MLKEM1024-v2\x00"
+
+
 class _P(ctypes.Structure):
-    _fields_=[("key",ctypes.c_char_p),("data_type",ctypes.c_uint),("data",ctypes.c_void_p),("data_size",ctypes.c_size_t),("return_size",ctypes.c_size_t)]
-L=ctypes.CDLL(ctypes.util.find_library("crypto") or "libcrypto.so"); C=ctypes.CDLL(None,use_errno=True)
-def bind(n,r,*a):
-    f=getattr(L,n); f.restype=r; f.argtypes=list(a); return f
-Q=bind("EVP_PKEY_Q_keygen",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p); PF=bind("EVP_PKEY_free",None,ctypes.c_void_p)
-PUB=bind("EVP_PKEY_get_raw_public_key",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t)); RAW=bind("EVP_PKEY_new_raw_public_key_ex",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
-CTX=bind("EVP_PKEY_CTX_new",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p); CF=bind("EVP_PKEY_CTX_free",None,ctypes.c_void_p)
-DI=bind("EVP_PKEY_derive_init",ctypes.c_int,ctypes.c_void_p); DP=bind("EVP_PKEY_derive_set_peer",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p); DV=bind("EVP_PKEY_derive",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t))
-EI=bind("EVP_PKEY_encapsulate_init",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p); EV=bind("EVP_PKEY_encapsulate",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t))
-KI=bind("EVP_PKEY_decapsulate_init",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p); KV=bind("EVP_PKEY_decapsulate",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.c_size_t)
-KF=bind("EVP_KDF_fetch",ctypes.c_void_p,ctypes.c_void_p,ctypes.c_char_p,ctypes.c_char_p); KFF=bind("EVP_KDF_free",None,ctypes.c_void_p); KCN=bind("EVP_KDF_CTX_new",ctypes.c_void_p,ctypes.c_void_p); KCF=bind("EVP_KDF_CTX_free",None,ctypes.c_void_p)
-KD=bind("EVP_KDF_derive",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_size_t,ctypes.POINTER(_P)); PU=bind("OSSL_PARAM_construct_utf8_string",_P,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_size_t); PO=bind("OSSL_PARAM_construct_octet_string",_P,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t); PE=bind("OSSL_PARAM_construct_end",_P); CMP=bind("CRYPTO_memcmp",ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_size_t)
-C.posix_memalign.restype=ctypes.c_int; C.posix_memalign.argtypes=[ctypes.POINTER(ctypes.c_void_p),ctypes.c_size_t,ctypes.c_size_t]; C.free.restype=None; C.free.argtypes=[ctypes.c_void_p]
-C.mlock.restype=ctypes.c_int; C.mlock.argtypes=[ctypes.c_void_p,ctypes.c_size_t]; C.munlock.restype=ctypes.c_int; C.munlock.argtypes=[ctypes.c_void_p,ctypes.c_size_t]; C.madvise.restype=ctypes.c_int; C.madvise.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int]; C.memset.restype=ctypes.c_void_p; C.memset.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_size_t]
-def fail(s): raise RuntimeError("native cryptographic operation failed: "+s)
+    _fields_ = [("key", ctypes.c_char_p), ("data_type", ctypes.c_uint),
+                ("data", ctypes.c_void_p), ("data_size", ctypes.c_size_t),
+                ("return_size", ctypes.c_size_t)]
+
+
+def _load_crypto():
+    path = os.environ.get("UQL_OPENSSL_LIBRARY")
+    if path and not os.path.isabs(path):
+        raise RuntimeError("UQL_OPENSSL_LIBRARY must be an operator-controlled absolute path")
+    lib = ctypes.CDLL(path or ctypes.util.find_library("crypto") or "libcrypto.so")
+    lib.OpenSSL_version_num.restype = ctypes.c_ulong
+    if lib.OpenSSL_version_num() < 0x30500000:
+        raise RuntimeError("UQL native crypto requires OpenSSL 3.5+ with ML-KEM support")
+    return lib
+
+
+L = _load_crypto()
+C = ctypes.CDLL(None, use_errno=True)
+
+
+def bind(name, result, *args):
+    fn = getattr(L, name)
+    fn.restype, fn.argtypes = result, list(args)
+    return fn
+
+
+V, N = ctypes.c_void_p, ctypes.c_size_t
+NP = ctypes.POINTER(N)
+Q = bind("EVP_PKEY_Q_keygen", V, V, V, ctypes.c_char_p)
+PF = bind("EVP_PKEY_free", None, V)
+PUB = bind("EVP_PKEY_get_raw_public_key", ctypes.c_int, V, V, NP)
+RAW = bind("EVP_PKEY_new_raw_public_key_ex", V, V, ctypes.c_char_p, ctypes.c_char_p, V, N)
+CTX = bind("EVP_PKEY_CTX_new", V, V, V)
+CF = bind("EVP_PKEY_CTX_free", None, V)
+DI = bind("EVP_PKEY_derive_init", ctypes.c_int, V)
+DP = bind("EVP_PKEY_derive_set_peer", ctypes.c_int, V, V)
+DV = bind("EVP_PKEY_derive", ctypes.c_int, V, V, NP)
+EI = bind("EVP_PKEY_encapsulate_init", ctypes.c_int, V, V)
+EV = bind("EVP_PKEY_encapsulate", ctypes.c_int, V, V, NP, V, NP)
+KI = bind("EVP_PKEY_decapsulate_init", ctypes.c_int, V, V)
+KV = bind("EVP_PKEY_decapsulate", ctypes.c_int, V, V, NP, V, N)
+KF = bind("EVP_KDF_fetch", V, V, ctypes.c_char_p, ctypes.c_char_p)
+KFF = bind("EVP_KDF_free", None, V)
+KCN = bind("EVP_KDF_CTX_new", V, V)
+KCF = bind("EVP_KDF_CTX_free", None, V)
+KD = bind("EVP_KDF_derive", ctypes.c_int, V, V, N, ctypes.POINTER(_P))
+PU = bind("OSSL_PARAM_construct_utf8_string", _P, ctypes.c_char_p, ctypes.c_char_p, N)
+PO = bind("OSSL_PARAM_construct_octet_string", _P, ctypes.c_char_p, V, N)
+PE = bind("OSSL_PARAM_construct_end", _P)
+CMP = bind("CRYPTO_memcmp", ctypes.c_int, V, V, N)
+CLEANSE = bind("OPENSSL_cleanse", None, V, N)
+for name in ("mlock", "munlock"):
+    fn = getattr(C, name)
+    fn.restype, fn.argtypes = ctypes.c_int, [V, N]
+C.madvise.restype, C.madvise.argtypes = ctypes.c_int, [V, N, ctypes.c_int]
+
+
+def fail(stage):
+    raise RuntimeError("native cryptographic operation failed: " + stage)
+
+
+def _bytes(value, length=None, *, maximum=None, name="input"):
+    if type(value) is not bytes:
+        raise ValueError(name + " must be immutable bytes")
+    if length is not None and len(value) != length:
+        raise ValueError("invalid " + name + " length")
+    if maximum is not None and len(value) > maximum:
+        raise ValueError(name + " exceeds configured bound")
+
+
+def transcript_info(bundle: bytes, ciphertext: bytes, context: bytes) -> bytes:
+    """Commit to all public inputs with unambiguous length framing, v2 only."""
+    _bytes(bundle, PUBLIC_BUNDLE_BYTES, name="public bundle")
+    _bytes(ciphertext, CIPHERTEXT_BYTES, name="ciphertext")
+    _bytes(context, maximum=MAX_CONTEXT_BYTES, name="context")
+    h = hashlib.sha512(KDF_DOMAIN + b"transcript\x00")
+    for value in (bundle, ciphertext, context):
+        h.update(len(value).to_bytes(8, "big"))
+        h.update(value)
+    return KDF_DOMAIN + h.digest()
+
+
 class NativeSecret:
-    __slots__=("_p","_size","_closed")
-    def __init__(self,p,size=64): self._p=ctypes.c_void_p(p); self._size=size; self._closed=False
+    """Factory-owned anonymous page; no secret export method."""
+    __slots__ = ("_map", "_p", "_size", "_closed", "_lock", "_pid")
+
+    def __init__(self, *_args, **_kwargs):
+        raise TypeError("use NativeSecret.allocate(); external pointers are not owned")
+
     @classmethod
-    def allocate(cls):
-        if platform.system()!="Linux": raise OSError("Linux mlock/madvise lockdown is required")
-        page=mmap.PAGESIZE; p=ctypes.c_void_p()
-        if C.posix_memalign(ctypes.byref(p),page,page)!=0 or not p.value: fail("allocation")
-        if C.mlock(p,page)!=0: C.free(p); fail("mlock")
-        if C.madvise(p,page,16)!=0: C.munlock(p,page); C.free(p); fail("MADV_DONTDUMP")
-        C.memset(p,0,page); return cls(p.value)
+    def allocate(cls, size=64):
+        if type(size) is not int or not 1 <= size <= mmap.PAGESIZE:
+            raise ValueError("invalid secret allocation size")
+        if platform.system() != "Linux":
+            raise OSError("Linux mlock/MADV_DONTDUMP is required")
+        page = mmap.mmap(-1, mmap.PAGESIZE, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+        p = ctypes.addressof(ctypes.c_char.from_buffer(page))
+        locked = False
+        try:
+            if C.mlock(p, mmap.PAGESIZE) != 0:
+                fail("mlock")
+            locked = True
+            if C.madvise(p, mmap.PAGESIZE, mmap.MADV_DONTDUMP) != 0:
+                fail("MADV_DONTDUMP")
+            if C.madvise(p, mmap.PAGESIZE, mmap.MADV_DONTFORK) != 0:
+                fail("MADV_DONTFORK")
+            obj = object.__new__(cls)
+            obj._map, obj._p, obj._size = page, p, size
+            obj._closed, obj._lock, obj._pid = False, threading.RLock(), os.getpid()
+            return obj
+        except BaseException:
+            CLEANSE(p, mmap.PAGESIZE)
+            if locked:
+                C.munlock(p, mmap.PAGESIZE)
+            page.close()
+            raise
+
+    def _check(self):
+        if self._closed or self._pid != os.getpid():
+            raise RuntimeError("secret closed or inherited across fork")
+
     @property
     def pointer(self):
-        if self._closed: raise RuntimeError("secret closed")
-        return int(self._p.value)
-    def same_as(self,other):
-        return isinstance(other,NativeSecret) and not self._closed and not other._closed and CMP(self._p,other._p,self._size)==0
+        self._check()
+        with self._lock:
+            self._check()
+            return self._p
+
+    def same_as(self, other):
+        if not isinstance(other, NativeSecret) or self._pid != os.getpid() or other._pid != os.getpid():
+            return False
+        first, second = sorted((self, other), key=id)
+        with first._lock, second._lock:
+            return (not self._closed and not other._closed and self._size == other._size
+                    and CMP(self._p, other._p, self._size) == 0)
+
     def close(self):
-        if self._closed:return
-        C.memset(self._p,0,mmap.PAGESIZE); C.munlock(self._p,mmap.PAGESIZE); C.free(self._p); self._closed=True; self._p=ctypes.c_void_p()
-    def __enter__(self):return self
-    def __exit__(self,*_):self.close()
+        if self._pid != os.getpid():
+            return
+        with self._lock:
+            if self._closed:
+                return
+            CLEANSE(self._p, mmap.PAGESIZE)
+            C.munlock(self._p, mmap.PAGESIZE)
+            self._map.close()
+            self._closed, self._p = True, 0
+
+    def __copy__(self):
+        raise TypeError("native secret ownership cannot be copied")
+
+    def __deepcopy__(self, _memo):
+        return self.__copy__()
+
+    def __reduce__(self):
+        raise TypeError("native secret cannot be serialized")
+
+    def __enter__(self):
+        self._check()
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
     def __del__(self):
-        try:self.close()
-        except Exception:pass
-@dataclass
+        if hasattr(self, "_lock"):
+            self.close()
+
+
 class NativeKeyPair:
-    _x:int
-    _k:int
+    __slots__ = ("_x", "_k", "_lock", "_pid")
+
+    def __init__(self, *_args):
+        raise TypeError("use NativeKeyPair.generate()")
+
     @classmethod
     def generate(cls):
-        x=Q(None,None,b"X25519"); k=Q(None,None,b"ML-KEM-1024")
-        if not x or not k: PF(x); PF(k); fail("key generation")
-        return cls(x,k)
+        x = k = None
+        try:
+            x = Q(None, None, b"X25519")
+            k = Q(None, None, b"ML-KEM-1024")
+            if not x or not k:
+                fail("key generation")
+            obj = object.__new__(cls)
+            obj._x, obj._k, obj._lock, obj._pid = x, k, threading.RLock(), os.getpid()
+            return obj
+        except BaseException:
+            PF(x)
+            PF(k)
+            raise
+
+    def _check(self):
+        if not self._x or not self._k or self._pid != os.getpid():
+            raise RuntimeError("key pair closed or inherited across fork")
+
     def public_bundle(self):
-        def pub(p,n):
-            b=ctypes.create_string_buffer(n); z=ctypes.c_size_t(n)
-            if PUB(p,b,ctypes.byref(z))<=0 or z.value!=n: fail("public key")
-            return b.raw
-        return pub(self._x,32)+pub(self._k,1568)
+        self._check()
+        with self._lock:
+            self._check()
+            return _public(self._x, 32) + _public(self._k, 1568)
+
     def close(self):
-        if self._x: PF(self._x); self._x=0
-        if self._k: PF(self._k); self._k=0
-    def __enter__(self):return self
-    def __exit__(self,*_):self.close()
+        if self._pid != os.getpid():
+            return
+        with self._lock:
+            if self._x:
+                PF(self._x)
+                self._x = 0
+            if self._k:
+                PF(self._k)
+                self._k = 0
+
+    def __copy__(self):
+        raise TypeError("native key ownership cannot be copied")
+
+    def __deepcopy__(self, _memo):
+        return self.__copy__()
+
+    def __reduce__(self):
+        raise TypeError("native keys cannot be serialized")
+
+    def __enter__(self):
+        self._check()
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
     def __del__(self):
-        try:self.close()
-        except Exception:pass
-def _xsecret(priv,peer_bytes):
-    peer=RAW(None,b"X25519",None,peer_bytes,32); c=CTX(priv,None)
+        if hasattr(self, "_lock"):
+            self.close()
+
+
+def _public(key, size):
+    result, n = ctypes.create_string_buffer(size), N(size)
+    if PUB(key, result, ctypes.byref(n)) <= 0 or n.value != size:
+        fail("public key extraction")
+    return result.raw
+
+
+def _xsecret(priv, peer_bytes, output):
+    peer = ctx = None
     try:
-        if not peer or not c or DI(c)<=0 or DP(c,peer)<=0:fail("X25519 setup")
-        out=ctypes.create_string_buffer(32); n=ctypes.c_size_t(32)
-        if DV(c,out,ctypes.byref(n))<=0 or n.value!=32:fail("X25519 derive")
-        return out
-    finally:CF(c);PF(peer)
-def _hkdf(x,k,transcript):
-    ikm=ctypes.create_string_buffer(64); C.memset(ikm,0,64); ctypes.memmove(ikm,x,32); ctypes.memmove(ctypes.addressof(ikm)+32,k,32)
-    info=b"UQL-HYBRID-X25519-MLKEM1024-v1"+transcript
-    if len(info)>1024:fail("HKDF info limit")
-    ib=ctypes.create_string_buffer(info); h=KF(None,b"HKDF",None); c=KCN(h); KFF(h)
-    if not c:fail("HKDF context")
+        peer = RAW(None, b"X25519", None, peer_bytes, 32)
+        ctx = CTX(priv, None)
+        if not peer or not ctx or DI(ctx) <= 0 or DP(ctx, peer) <= 0:
+            fail("X25519 setup")
+        n = N(32)
+        if DV(ctx, output.pointer, ctypes.byref(n)) <= 0 or n.value != 32:
+            fail("X25519 derive")
+    finally:
+        CF(ctx)
+        PF(peer)
+
+
+def _hkdf(x, k, info):
+    with NativeSecret.allocate(64) as ikm:
+        ctypes.memmove(ikm.pointer, x.pointer, 32)
+        ctypes.memmove(ikm.pointer + 32, k.pointer, 32)
+        ib = ctypes.create_string_buffer(info)
+        h = KF(None, b"HKDF", None)
+        if not h:
+            fail("HKDF fetch")
+        try:
+            ctx = KCN(h)
+        finally:
+            KFF(h)
+        if not ctx:
+            fail("HKDF context")
+        try:
+            params = (_P * 5)(PU(b"mode", b"EXTRACT_AND_EXPAND", 0),
+                              PU(b"digest", b"SHA512", 0), PO(b"key", ikm.pointer, 64),
+                              PO(b"info", ib, len(info)), PE())
+            secret = NativeSecret.allocate()
+            try:
+                if KD(ctx, secret.pointer, 64, params) <= 0:
+                    fail("HKDF derive")
+                return secret
+            except BaseException:
+                secret.close()
+                raise
+        finally:
+            KCF(ctx)
+
+
+def encapsulate(bundle, context=b""):
+    _bytes(bundle, PUBLIC_BUNDLE_BYTES, name="public bundle")
+    _bytes(context, maximum=MAX_CONTEXT_BYTES, name="context")
+    kp = eph = kc = None
     try:
-        ps=(_P*5)(); ps[0]=PU(b"mode",b"EXTRACT_AND_EXPAND",0); ps[1]=PU(b"digest",b"SHA512",0); ps[2]=PO(b"key",ikm,64); ps[3]=PO(b"info",ib,len(info)); ps[4]=PE()
-        s=NativeSecret.allocate()
-        if KD(c,s.pointer,64,ps)<=0:s.close();fail("HKDF")
-        C.memset(ikm,0,64); return s
-    finally:KCF(c)
-def encapsulate(bundle,context=b""):
-    if len(bundle)!=1600:raise ValueError("invalid hybrid public-key bundle")
-    xp=RAW(None,b"X25519",None,bundle[:32],32); kp=RAW(None,b"ML-KEM-1024",None,bundle[32:],1568); eph=Q(None,None,b"X25519")
-    if not xp or not kp or not eph:PF(xp);PF(kp);PF(eph);fail("encapsulation setup")
-    xc=CTX(eph,None); kc=CTX(kp,None)
-    try:
-        if not xc or DI(xc)<=0 or DP(xc,xp)<=0:fail("X25519 encapsulation")
-        xs=ctypes.create_string_buffer(32); xn=ctypes.c_size_t(32)
-        if DV(xc,xs,ctypes.byref(xn))<=0:fail("X25519 secret")
-        if not kc or EI(kc,None)<=0:fail("ML-KEM encapsulation")
-        ct=ctypes.create_string_buffer(1568); cn=ctypes.c_size_t(1568); ms=ctypes.create_string_buffer(32); mn=ctypes.c_size_t(32)
-        if EV(kc,ct,ctypes.byref(cn),ms,ctypes.byref(mn))<=0 or cn.value!=1568 or mn.value!=32:fail("ML-KEM encapsulation")
-        pb=ctypes.create_string_buffer(32); pn=ctypes.c_size_t(32)
-        if PUB(eph,pb,ctypes.byref(pn))<=0:fail("ephemeral public key")
-        ciphertext=pb.raw+ct.raw
-        return ciphertext,_hkdf(xs,ms,bundle+ciphertext+context)
-    finally:CF(xc);CF(kc);PF(xp);PF(kp);PF(eph)
-def decapsulate(kp,ciphertext,context=b""):
-    if len(ciphertext)!=1600:raise ValueError("invalid hybrid ciphertext")
-    xs=_xsecret(kp._x,ciphertext[:32]); kc=CTX(kp._k,None)
-    try:
-        if not kc or KI(kc,None)<=0:fail("ML-KEM decapsulation")
-        ct=ctypes.create_string_buffer(ciphertext[32:]); ms=ctypes.create_string_buffer(32); n=ctypes.c_size_t(32)
-        if KV(kc,ms,ctypes.byref(n),ct,1568)<=0 or n.value!=32:fail("ML-KEM decapsulation")
-        return _hkdf(xs,ms,kp.public_bundle()+ciphertext+context)
-    finally:CF(kc)
+        kp = RAW(None, b"ML-KEM-1024", None, bundle[32:], 1568)
+        eph = Q(None, None, b"X25519")
+        if not kp or not eph:
+            fail("encapsulation setup")
+        with NativeSecret.allocate(32) as xs, NativeSecret.allocate(32) as ms:
+            _xsecret(eph, bundle[:32], xs)
+            kc = CTX(kp, None)
+            if not kc or EI(kc, None) <= 0:
+                fail("ML-KEM encapsulation setup")
+            ct, cn, mn = ctypes.create_string_buffer(1568), N(1568), N(32)
+            if EV(kc, ct, ctypes.byref(cn), ms.pointer, ctypes.byref(mn)) <= 0 or cn.value != 1568 or mn.value != 32:
+                fail("ML-KEM encapsulation")
+            ciphertext = _public(eph, 32) + ct.raw
+            return ciphertext, _hkdf(xs, ms, transcript_info(bundle, ciphertext, context))
+    finally:
+        CF(kc)
+        PF(kp)
+        PF(eph)
+
+
+def decapsulate(kp, ciphertext, context=b""):
+    if not isinstance(kp, NativeKeyPair):
+        raise ValueError("invalid native recipient")
+    _bytes(ciphertext, CIPHERTEXT_BYTES, name="ciphertext")
+    _bytes(context, maximum=MAX_CONTEXT_BYTES, name="context")
+    kp._check()
+    with kp._lock:
+        kp._check()
+        with NativeSecret.allocate(32) as xs, NativeSecret.allocate(32) as ms:
+            kc = None
+            try:
+                _xsecret(kp._x, ciphertext[:32], xs)
+                kc = CTX(kp._k, None)
+                if not kc or KI(kc, None) <= 0:
+                    fail("ML-KEM decapsulation setup")
+                ct, n = ctypes.create_string_buffer(ciphertext[32:]), N(32)
+                if KV(kc, ms.pointer, ctypes.byref(n), ct, 1568) <= 0 or n.value != 32:
+                    fail("ML-KEM decapsulation")
+                return _hkdf(xs, ms, transcript_info(kp.public_bundle(), ciphertext, context))
+            finally:
+                CF(kc)

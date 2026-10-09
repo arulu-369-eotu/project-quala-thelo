@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+*.pem
+*.key
+*.p12
+.hypothesis/
+.test-openssl/
+audit-output/

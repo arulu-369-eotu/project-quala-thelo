@@ -21,12 +21,12 @@ class CompilerManifest:
 
 DEFAULT_ARCHITECTURE = ArchitectureDeclaration(
     name="UQL Omniversal Compiler",
-    version="1.1.0",
+    version="1.2.0",
     mechanisms=(
         "native OpenSSL X25519",
         "native OpenSSL ML-KEM-1024",
         "native OpenSSL HKDF-SHA-512",
-        "native page-aligned mlock/MADV_DONTDUMP secret enclave",
+        "dedicated anonymous mlock/MADV_DONTDUMP working pages",
         "surface-code syndrome extraction",
         "coherence-aware dynamical decoupling",
     ),

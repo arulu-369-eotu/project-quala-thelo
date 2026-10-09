@@ -1,0 +1,52 @@
+{
+  "review_date": "2026-10-09",
+  "main_baseline_commit": "81a515e36c35ddd28ad00096442db874d67bb5ab",
+  "prior_upgrade_parent_commit": "76ca6ca262c936b7d3f5acb8fce56a12e4ebcca9",
+  "environment": {
+    "python": "3.12.14",
+    "system": "Linux",
+    "machine": "x86_64",
+    "native_openssl": "3.5.8"
+  },
+  "baseline": {
+    "tests": 33,
+    "failures": 5,
+    "passed": 28,
+    "skipped": 0
+  },
+  "final": {
+    "tests": 120,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "hypothesis_json_examples": 200
+  },
+  "bandit": {
+    "version": "1.9.4",
+    "production_python_lines": 1966,
+    "findings": 0,
+    "suppressed": 0
+  },
+  "dependencies": {
+    "scanner": "pip-audit 2.10.1",
+    "locked_packages": 61,
+    "known_vulnerability_findings": 0,
+    "initial_environment_pip_advisory_ids": [
+      "PYSEC-2026-1795",
+      "PYSEC-2026-1796",
+      "PYSEC-2026-196",
+      "PYSEC-2026-2875",
+      "PYSEC-2026-2876",
+      "PYSEC-2026-3721"
+    ],
+    "pip_repaired_to": "26.2.1"
+  },
+  "native_source_sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+  "boundaries": [
+    "No production security certification",
+    "No hardware attestation adapter deployed",
+    "No external witness network deployed",
+    "No royalty settlement or money transfer",
+    "No OpenAI internal Codex access or user-device fleet scan"
+  ]
+}
