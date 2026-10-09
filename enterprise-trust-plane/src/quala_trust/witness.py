@@ -146,6 +146,24 @@ class WitnessStore:
             ).fetchone()
             if prior is not None:
                 old_seq, old_head, old_digest, old_receipt_json = prior
+                # Detect unauthorized database edits before trusting historical state.
+                previously_signed = loads_strict(old_receipt_json)
+                prior_body = previously_signed.get("receipt") if type(previously_signed) is dict else None
+                prior_sig = previously_signed.get("signature") if type(previously_signed) is dict else None
+                if (type(prior_body) is not dict or type(prior_sig) is not str or
+                        len(prior_sig) != 128 or
+                        prior_body.get("tenant") != self.tenant or
+                        prior_body.get("witness_id") != self.witness_id or
+                        prior_body.get("sequence") != old_seq or
+                        prior_body.get("head") != old_head or
+                        prior_body.get("checkpoint_sha256") != old_digest):
+                    raise TrustError("witness database history corrupted")
+                try:
+                    self.signing_key.public_key().verify(
+                        bytes.fromhex(prior_sig), WITNESS_DOMAIN + canonical(prior_body)
+                    )
+                except (InvalidSignature, ValueError) as exc:
+                    raise TrustError("witness historical signature corrupted") from exc
                 if check["sequence"] == old_seq and check["head"] == old_head and target_digest == old_digest:
                     out = loads_strict(old_receipt_json)
                     self.db.execute("COMMIT")
