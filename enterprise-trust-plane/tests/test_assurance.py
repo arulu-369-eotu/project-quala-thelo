@@ -80,9 +80,9 @@ def sample(tmp_path, *, failed=0, skipped=0):
 
 def test_full_chain_accepts_signed_independent_quorum(tmp_path):
     path, verified, evidence, receipts, verifier, akey, keys, proof = sample(tmp_path)
-    signed = verifier.admit(evidence, receipts[:2], path, now=NOW,
+    signed = verifier.admit(evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                             github_options={"runner": mock_sigstore_cli})
-    verified_body = verify_assurance_receipt(signed, akey.public_key())
+    verified_body = verify_assurance_receipt(signed, akey.public_key(), expected_audience="procurement", expected_challenge=b"z"*32)
     assert verified_body["decision"] == "ALLOW"
     assert verified_body["witness_ids"] == ["witness-a", "witness-b"]
     assert verified_body["github_artifact_sha256"] == verified.artifact_sha256
@@ -91,7 +91,7 @@ def test_full_chain_accepts_signed_independent_quorum(tmp_path):
 def test_attestation_command_failed_is_fail_closed(tmp_path):
     path, _, evidence, receipts, verifier, *_ = sample(tmp_path)
     with pytest.raises(TrustError):
-        verifier.admit(evidence, receipts[:2], path, now=NOW,
+        verifier.admit(evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": failing_cli})
 
 
@@ -101,17 +101,17 @@ def test_wrong_artifact_digest_cannot_be_admitted(tmp_path):
     changed["tests"]["duration_ms"] = 125
     path.write_bytes(canonical(changed))
     with pytest.raises(TrustError):
-        verifier.admit(evidence, receipts[:2], path, now=NOW,
+        verifier.admit(evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
 
 
 def test_incomplete_or_duplicate_witness_quorum_rejected(tmp_path):
     path, _, evidence, receipts, verifier, *_ = sample(tmp_path)
     with pytest.raises(TrustError):
-        verifier.admit(evidence, receipts[:1], path, now=NOW,
+        verifier.admit(evidence, receipts[:1], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
     with pytest.raises(TrustError):
-        verifier.admit(evidence, [receipts[0], receipts[0]], path, now=NOW,
+        verifier.admit(evidence, [receipts[0], receipts[0]], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
 
 
@@ -120,12 +120,12 @@ def test_tampered_witness_and_chain_rejected(tmp_path):
     damaged = copy.deepcopy(receipts[:2])
     damaged[1]["receipt"]["head"] = "f" * 64
     with pytest.raises(TrustError):
-        verifier.admit(evidence, damaged, path, now=NOW,
+        verifier.admit(evidence, damaged, path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
     changed_evidence = copy.deepcopy(evidence)
     changed_evidence["records"][0]["measurement"]["metrics"]["duration_ms"] += 1
     with pytest.raises(TrustError):
-        verifier.admit(changed_evidence, receipts[:2], path, now=NOW,
+        verifier.admit(changed_evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
 
 
@@ -146,7 +146,7 @@ def test_failing_or_skipped_ci_is_not_admitted(tmp_path, failed, skipped):
     path, _, evidence, receipts, verifier, *_ = sample(
         tmp_path, failed=failed, skipped=skipped)
     with pytest.raises(TrustError):
-        verifier.admit(evidence, receipts[:2], path, now=NOW,
+        verifier.admit(evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
 
 
@@ -170,7 +170,7 @@ def test_witness_replay_is_idempotent_and_fork_fails(tmp_path):
 def test_stale_checkpoint_is_rejected(tmp_path):
     path, _, evidence, receipts, verifier, *_ = sample(tmp_path)
     with pytest.raises(TrustError):
-        verifier.admit(evidence, receipts[:2], path, now=NOW + 4000,
+        verifier.admit(evidence, receipts[:2], path, audience="procurement", client_challenge=b"z"*32, now=NOW + 4000,
                        github_options={"runner": mock_sigstore_cli})
 
 
@@ -179,7 +179,7 @@ def test_rogue_witness_identity_rejected(tmp_path):
     tampered = copy.deepcopy(receipts[:2])
     tampered[1]["receipt"]["witness_id"] = "witness-rogue"
     with pytest.raises(TrustError):
-        verifier.admit(evidence, tampered, path, now=NOW,
+        verifier.admit(evidence, tampered, path, audience="procurement", client_challenge=b"z"*32, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
 
 
