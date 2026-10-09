@@ -12,6 +12,7 @@ requirements not provided by this library.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -35,9 +36,11 @@ class AssurancePolicy:
     witness_keys: Mapping[str, Ed25519PublicKey]
     min_witnesses: int = 2
     max_age_seconds: int = 3600
+    audience: str = "procurement"
 
     def __post_init__(self) -> None:
         identifier(self.tenant)
+        identifier(self.audience)
         if type(self.min_witnesses) is not int or self.min_witnesses < 2:
             raise TrustError("ABRAXAS requires at least two witnesses")
         if type(self.max_age_seconds) is not int or not 1 <= self.max_age_seconds <= 86_400:
@@ -62,6 +65,7 @@ class AssurancePolicy:
     def sha256(self) -> str:
         return digest({
             "tenant": self.tenant,
+            "audience": self.audience,
             "repo": self.expected_github.repo,
             "signer_workflow": self.expected_github.signer_workflow,
             "source_sha": self.expected_github.source_sha,
@@ -75,7 +79,10 @@ class AssurancePolicy:
         })
 
 
-def verify_assurance_receipt(envelope: Any, key: Ed25519PublicKey) -> dict[str, Any]:
+def verify_assurance_receipt(
+    envelope: Any, key: Ed25519PublicKey, *,
+    expected_audience: str, expected_challenge: bytes,
+) -> dict[str, Any]:
     if type(envelope) is not dict or set(envelope) != {"receipt", "signature"}:
         raise TrustError("invalid ABRAXAS envelope")
     body = envelope["receipt"]
@@ -83,12 +90,21 @@ def verify_assurance_receipt(envelope: Any, key: Ed25519PublicKey) -> dict[str, 
         "version", "verifier_id", "decision", "tenant", "checkpoint_sha256",
         "policy_sha256", "github_artifact_sha256", "github_run_id",
         "source_sha", "source_ref", "witness_ids", "checked_at",
+        "audience", "challenge_sha256",
     } or body.get("version") != ABRAXAS_VERSION:
         raise TrustError("invalid ABRAXAS receipt")
     if body.get("decision") != "ALLOW":
         raise TrustError("invalid ABRAXAS admission decision")
     identifier(body["verifier_id"])
     identifier(body["tenant"])
+    identifier(expected_audience)
+    if type(expected_challenge) is not bytes or len(expected_challenge) != 32:
+        raise TrustError("expected challenge must be 32 random bytes")
+    expected_hash = hashlib.sha256(
+        b"ABRAXAS7-CHALLENGE-v1\x00" + expected_challenge
+    ).hexdigest()
+    if body["audience"] != expected_audience or body["challenge_sha256"] != expected_hash:
+        raise TrustError("relying-party challenge binding mismatch")
     for field in ("checkpoint_sha256", "policy_sha256", "github_artifact_sha256"):
         value = body[field]
         if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
@@ -125,9 +141,16 @@ class Abraxas7Verifier:
 
     def admit(
         self, evidence: dict[str, Any], witness_receipts: list[dict[str, Any]],
-        ci_report_path: str | Path, *, now: int | None = None,
+        ci_report_path: str | Path, *,
+        audience: str, client_challenge: bytes,
+        now: int | None = None,
         github_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        identifier(audience)
+        if audience != self.policy.audience:
+            raise TrustError("relying party not authorized for this policy")
+        if type(client_challenge) is not bytes or len(client_challenge) != 32:
+            raise TrustError("32-byte relying-party challenge is mandatory")
         stamp = int(time.time()) if now is None else now
         if type(stamp) is not int or stamp < 0:
             raise TrustError("invalid verifier time")
@@ -192,6 +215,10 @@ class Abraxas7Verifier:
             "github_artifact_sha256": verified.artifact_sha256,
             "github_run_id": verified.run_id,
             "source_sha": verified.source_sha, "source_ref": verified.source_ref,
+            "audience": audience,
+            "challenge_sha256": hashlib.sha256(
+                b"ABRAXAS7-CHALLENGE-v1\x00" + client_challenge
+            ).hexdigest(),
             "witness_ids": sorted(valid), "checked_at": stamp,
         }
         return {
