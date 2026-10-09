@@ -1,7 +1,5 @@
 # PROJECT QUA'LA THE'LO — Phase 5: The Labyrinth
 
-This repository establishes the compartmentalized architecture described in the Grandmaster Codex.
-
 ## Mesh compartments
 
 - `citadel-core/` — UQL, QHL, QTL base syntaxes and phase-angle logic.
