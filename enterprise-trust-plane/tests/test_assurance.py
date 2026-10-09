@@ -181,3 +181,19 @@ def test_rogue_witness_identity_rejected(tmp_path):
     with pytest.raises(TrustError):
         verifier.admit(evidence, tampered, path, now=NOW,
                        github_options={"runner": mock_sigstore_cli})
+
+
+def test_witness_detects_corrupted_own_database(tmp_path):
+    path, _, evidence, receipts, verifier, akey, keys, proof = sample(tmp_path)
+    store = WitnessStore(tmp_path / "witness-a.db", "witness-a", "bank1",
+                         proof.public_key(), keys["witness-a"])
+    try:
+        store.db.execute(
+            "UPDATE witness_receipts SET receipt=? WHERE tenant=? AND witness_id=?",
+            ('{"receipt":{"version":"fake"},"signature":"00"}',
+             "bank1", "witness-a")
+        )
+        with pytest.raises(TrustError):
+            store.witness(evidence, now=NOW)
+    finally:
+        store.close()
