@@ -98,8 +98,7 @@ def build_dd_pass_manager(
         PadDynamicalDecoupling(
             durations,
             [XGate(), XGate()],
-            spacings=uhrig_spacings(pulse_count),
-            sequence_min_length_ratios=config.min_idle_ratio,
+            spacing=list(uhrig_spacings(pulse_count)),
         ),
     ])
 
