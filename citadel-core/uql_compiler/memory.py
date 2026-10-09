@@ -89,7 +89,8 @@ class LockedBuffer:
             except BufferError as exc:
                 raise RuntimeError("release all exported memoryviews before close") from exc
         if self._locked and self._size:
-            self._unlock()
+            # Mapping is released; OS automatically drops its page lock.
+            pass
         self._closed = True
         self._locked = False
         self._address = 0
