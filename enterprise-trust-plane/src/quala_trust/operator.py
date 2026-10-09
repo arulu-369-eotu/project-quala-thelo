@@ -18,7 +18,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from .abraxas7 import Abraxas7Verifier, AssurancePolicy
-from .github_ci import GitHubIdentity
+from .github_ci import GitHubIdentity, verify_github_ci
+from .proof369 import EvidenceLedger
 from .protocol import TrustError, canonical
 from .witness import WitnessStore
 
@@ -93,6 +94,18 @@ def cli(argv: list[str] | None = None) -> int:
     witness.add_argument("--witness-private", required=True)
     witness.add_argument("--evidence", required=True)
     witness.add_argument("--out", required=True)
+    ingest = sub.add_parser("ingest", help="Verify GitHub attestation before admitting a measured record")
+    ingest.add_argument("--tenant", required=True)
+    ingest.add_argument("--repo", required=True)
+    ingest.add_argument("--source-sha", required=True)
+    ingest.add_argument("--source-ref", default="refs/heads/main")
+    ingest.add_argument("--database", required=True)
+    ingest.add_argument("--proof-private", required=True)
+    ingest.add_argument("--ci-report", required=True)
+    ingest.add_argument("--gh-executable", default="gh")
+    ingest.add_argument("--bundle")
+    ingest.add_argument("--trusted-root")
+    ingest.add_argument("--out", required=True)
     verify = sub.add_parser("verify", help="Run on a separate ABRAXAS verifier host")
     verify.add_argument("--id", required=True)
     verify.add_argument("--tenant", required=True)
@@ -118,6 +131,23 @@ def cli(argv: list[str] | None = None) -> int:
                           private_key(a.witness_private)) as store:
             receipt = store.witness(read_document(a.evidence))
         write_new(a.out, receipt)
+        return 0
+    if a.command == "ingest":
+        if a.source_ref != "refs/heads/main":
+            raise TrustError("admission of non-main CI is prohibited")
+        identity = GitHubIdentity(a.repo,
+            f"{a.repo}/.github/workflows/proof369-attested-ci.yml",
+            a.source_sha, a.source_ref)
+        proven = verify_github_ci(
+            a.ci_report, identity, a.tenant,
+            gh_executable=a.gh_executable, bundle_path=a.bundle,
+            trusted_root_path=a.trusted_root,
+        )
+        with EvidenceLedger(a.database, a.tenant,
+                            private_key(a.proof_private)) as ledger:
+            ledger.append(proven.measurement)
+            result = ledger.export()
+        write_new(a.out, result)
         return 0
     keys = {}
     for item in a.witness_public:
