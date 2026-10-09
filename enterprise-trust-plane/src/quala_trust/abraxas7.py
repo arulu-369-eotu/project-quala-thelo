@@ -171,6 +171,10 @@ class Abraxas7Verifier:
             ci_report_path, self.policy.expected_github, self.policy.tenant,
             **(github_options or {}),
         )
+        if (verified.measurement["measured_at"] > checkpoint["issued_at"] + 60 or
+                verified.measurement["measured_at"] > stamp + 60 or
+                stamp - verified.measurement["measured_at"] > self.policy.max_age_seconds):
+            raise TrustError("GitHub CI measurement stale or future-dated")
         matches = [
             row["measurement"] for row in rows
             if row["measurement"]["subject"] == "github-ci" and
