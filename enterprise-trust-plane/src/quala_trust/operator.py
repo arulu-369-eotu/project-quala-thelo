@@ -109,6 +109,9 @@ def cli(argv: list[str] | None = None) -> int:
     verify = sub.add_parser("verify", help="Run on a separate ABRAXAS verifier host")
     verify.add_argument("--id", required=True)
     verify.add_argument("--tenant", required=True)
+    verify.add_argument("--audience", required=True)
+    verify.add_argument("--challenge-hex", required=True,
+                        help="64 hex characters from a relying-party 32-byte random challenge")
     verify.add_argument("--repo", required=True)
     verify.add_argument("--source-sha", required=True)
     verify.add_argument("--source-ref", default="refs/heads/main")
@@ -161,7 +164,10 @@ def cli(argv: list[str] | None = None) -> int:
         a.repo, f"{a.repo}/.github/workflows/proof369-attested-ci.yml",
         a.source_sha, a.source_ref,
     )
-    policy = AssurancePolicy(a.tenant, identity, keys, a.min_witnesses)
+    policy = AssurancePolicy(a.tenant, identity, keys, a.min_witnesses,
+                             audience=a.audience)
+    if len(a.challenge_hex) != 64 or any(c not in "0123456789abcdef" for c in a.challenge_hex):
+        raise TrustError("invalid relying-party challenge encoding")
     verified = Abraxas7Verifier(
         a.id, public_key(a.checkpoint_public), private_key(a.verifier_private),
         policy,
@@ -169,6 +175,7 @@ def cli(argv: list[str] | None = None) -> int:
         read_document(a.evidence),
         [read_document(path) for path in a.witness_receipt],
         a.ci_report,
+        audience=a.audience, client_challenge=bytes.fromhex(a.challenge_hex),
         github_options={
             "gh_executable": a.gh_executable,
             "bundle_path": a.bundle,
