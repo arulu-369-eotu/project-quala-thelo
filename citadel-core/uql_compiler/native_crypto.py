@@ -1,6 +1,6 @@
 """Native OpenSSL enclave: private keys and derived secrets never enter Python byte storage."""
 from __future__ import annotations
-import ctypes, ctypes.util, mmap, platform
+import ctypes, ctypes.util, mmap, platform, hashlib
 from dataclasses import dataclass
 class _P(ctypes.Structure):
     _fields_=[("key",ctypes.c_char_p),("data_type",ctypes.c_uint),("data",ctypes.c_void_p),("data_size",ctypes.c_size_t),("return_size",ctypes.c_size_t)]
@@ -76,8 +76,14 @@ def _xsecret(priv,peer_bytes):
     finally:CF(c);PF(peer)
 def _hkdf(x,k,transcript):
     ikm=ctypes.create_string_buffer(64); C.memset(ikm,0,64); ctypes.memmove(ikm,x,32); ctypes.memmove(ctypes.addressof(ikm)+32,k,32)
-    info=b"UQL-HYBRID-X25519-MLKEM1024-v1"+transcript
-    if len(info)>1024:fail("HKDF info limit")
+    # Transcript is public protocol data. Hash the complete, length-bound
+    # transcript before HKDF rather than truncating it or exceeding EVP limits.
+    # Domain separation and explicit lengths avoid ambiguous concatenations.
+    if type(transcript) is not bytes or len(transcript)>8192:
+        raise ValueError("invalid transcript")
+    info=b"UQL-HYBRID-X25519-MLKEM1024-v2\x00"+hashlib.sha512(
+        b"UQL-HYBRID-TRANSCRIPT-v2\x00"+len(transcript).to_bytes(4,"big")+transcript
+    ).digest()
     ib=ctypes.create_string_buffer(info); h=KF(None,b"HKDF",None); c=KCN(h); KFF(h)
     if not c:fail("HKDF context")
     try:
@@ -88,6 +94,7 @@ def _hkdf(x,k,transcript):
     finally:KCF(c)
 def encapsulate(bundle,context=b""):
     if len(bundle)!=1600:raise ValueError("invalid hybrid public-key bundle")
+    if type(context) is not bytes or len(context)>4096:raise ValueError("invalid hybrid context")
     xp=RAW(None,b"X25519",None,bundle[:32],32); kp=RAW(None,b"ML-KEM-1024",None,bundle[32:],1568); eph=Q(None,None,b"X25519")
     if not xp or not kp or not eph:PF(xp);PF(kp);PF(eph);fail("encapsulation setup")
     xc=CTX(eph,None); kc=CTX(kp,None)
@@ -105,6 +112,7 @@ def encapsulate(bundle,context=b""):
     finally:CF(xc);CF(kc);PF(xp);PF(kp);PF(eph)
 def decapsulate(kp,ciphertext,context=b""):
     if len(ciphertext)!=1600:raise ValueError("invalid hybrid ciphertext")
+    if type(context) is not bytes or len(context)>4096:raise ValueError("invalid hybrid context")
     xs=_xsecret(kp._x,ciphertext[:32]); kc=CTX(kp._k,None)
     try:
         if not kc or KI(kc,None)<=0:fail("ML-KEM decapsulation")
