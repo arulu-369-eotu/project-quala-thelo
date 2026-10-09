@@ -5,6 +5,7 @@ native extensions. Therefore this module deliberately reports capability
 rather than promising absolute cold-boot protection. It locks the backing
 bytearray where the operating system permits it and can exclude Linux pages
 from core dumps.
+Retained memoryviews remain writable; callers must release them before close.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class MemoryLockStatus:
 class LockedBuffer:
     def __init__(self, initial: bytes | bytearray = b"", *, require_lock: bool = False):
         self._buf = bytearray(initial)
+        self._closed = False
         self._locked = False
         self._dump_excluded = False
         self._status = self._lock()
@@ -47,12 +49,20 @@ class LockedBuffer:
     def __exit__(self, *_exc: object) -> None:
         self.close()
 
+    def __del__(self):
+        if hasattr(self, "_closed"):
+            self.close()
+
     def view(self) -> memoryview:
+        if self._closed:
+            raise ValueError("secret buffer is closed")
         if not self._buf:
             raise ValueError("empty secret buffer has no writable address")
         return memoryview(self._buf)
 
     def write(self, data: bytes | bytearray) -> None:
+        if self._closed:
+            raise ValueError("secret buffer is closed")
         if len(data) != len(self._buf):
             raise ValueError("write must preserve buffer length")
         self._buf[:] = data
@@ -62,10 +72,13 @@ class LockedBuffer:
             self._buf[i] = 0
 
     def close(self) -> None:
+        if self._closed:
+            return
         self.wipe()
         if self._locked and self._buf:
             _munlock(self._buf)
         self._locked = False
+        self._closed = True
         self._status = MemoryLockStatus(
             locked=False,
             dump_excluded=self._dump_excluded,

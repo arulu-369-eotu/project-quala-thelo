@@ -41,6 +41,8 @@ def _json_shape(obj: Any, depth: int = 0) -> None:
     if obj is None or type(obj) in (str, bool):
         if type(obj) is str and len(obj) > 4_096:
             raise TrustError("oversized string")
+        if type(obj) is str and any(0xD800 <= ord(c) <= 0xDFFF for c in obj):
+            raise TrustError("unpaired Unicode surrogate")
         return
     if type(obj) is int:
         if abs(obj) > 2**53 - 1:
@@ -58,6 +60,7 @@ def _json_shape(obj: Any, depth: int = 0) -> None:
         for k, v in obj.items():
             if type(k) is not str:
                 raise TrustError("JSON object keys must be strings")
+            _json_shape(k, depth + 1)
             _json_shape(v, depth + 1)
         return
     raise TrustError("unsupported JSON type (including floating point)")
@@ -79,7 +82,13 @@ def loads_strict(source: bytes | str) -> Any:
             source = source.decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise TrustError("invalid UTF-8") from exc
-    if type(source) is not str or len(source.encode("utf-8")) > MAX_WIRE_BYTES:
+    if type(source) is not str:
+        raise TrustError("invalid JSON input type")
+    try:
+        size = len(source.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise TrustError("invalid Unicode input") from exc
+    if size > MAX_WIRE_BYTES:
         raise TrustError("invalid or oversized JSON input")
 
     def distinct_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -94,7 +103,7 @@ def loads_strict(source: bytes | str) -> Any:
         parsed = json.loads(source, object_pairs_hook=distinct_pairs,
                             parse_constant=lambda _: (_ for _ in ()).throw(
                                 TrustError("non-finite JSON number")))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise TrustError("invalid JSON") from exc
     canonical(parsed)
     return parsed
@@ -169,8 +178,32 @@ def verify_receipt(receipt: Any, trusted_verifier_key: Ed25519PublicKey) -> bool
     if type(signature) is not str or re.fullmatch(r"[0-9a-f]{128}", signature) is None:
         raise TrustError("invalid receipt signature format")
     body = receipt["receipt"]
-    if type(body) is not dict or body.get("version") != "quala-receipt-v1":
-        raise TrustError("invalid receipt version")
+    required = {"version", "verifier", "ledger_seq", "ledger_hash", "previous_hash", "at",
+                "tenant", "audience", "purpose", "issuer", "key_id", "policy_id",
+                "policy_sha256", "attestation_sha256", "evidence_sha256", "decision",
+                "reason_codes", "nonce_commitment"}
+    optional = {"passport_id", "subject", "passport_sha256", "presentation_sha256"}
+    if type(body) is not dict or not required <= set(body) or set(body) - required - optional or body.get("version") != "quala-receipt-v1":
+        raise TrustError("invalid receipt schema")
+    if set(body) & optional and not optional <= set(body):
+        raise TrustError("incomplete passport receipt")
+    for field in ("verifier", "tenant", "audience", "purpose", "issuer", "key_id", "policy_id"):
+        identifier(body[field])
+    for field in ("ledger_hash", "previous_hash", "policy_sha256", "attestation_sha256", "evidence_sha256", "nonce_commitment"):
+        if not _is_hex256(body[field]):
+            raise TrustError("invalid receipt hash")
+    if type(body["ledger_seq"]) is not int or body["ledger_seq"] < 1 or type(body["at"]) is not int or body["at"] < 0:
+        raise TrustError("invalid receipt sequence or time")
+    reasons = body["reason_codes"]
+    if type(reasons) is not list or len(reasons) > 33 or any(type(r) is not str or not 1 <= len(r) <= 160 for r in reasons):
+        raise TrustError("invalid receipt reason codes")
+    if body["decision"] not in ("ALLOW", "DENY") or (body["decision"] == "ALLOW") != (not reasons):
+        raise TrustError("inconsistent receipt decision")
+    if optional <= set(body):
+        identifier(body["passport_id"])
+        identifier(body["subject"])
+        if not _is_hex256(body["passport_sha256"]) or not _is_hex256(body["presentation_sha256"]):
+            raise TrustError("invalid passport receipt hash")
     try:
         trusted_verifier_key.verify(bytes.fromhex(signature), RECEIPT_DOMAIN + canonical(body))
     except InvalidSignature as exc:
@@ -197,6 +230,7 @@ class Rule:
                 raise TrustError("one_of requires string values")
         if self.operation == "eq" and type(self.value) not in (bool, int, str):
             raise TrustError("invalid equality value")
+        canonical(self.as_dict())
 
     def check(self, claims: Mapping[str, Any]) -> bool:
         if self.field not in claims:
@@ -224,25 +258,35 @@ class Policy:
     allowed_issuers: tuple[str, ...]
     rules: tuple[Rule, ...]
     max_age_seconds: int = 120
+    require_hardware_identity: bool = False
+    max_credential_age_seconds: int = 86400
 
     def __post_init__(self) -> None:
         for name in (self.policy_id, self.tenant, self.audience, self.purpose):
             identifier(name)
-        if not self.allowed_issuers or not self.rules:
+        if type(self.allowed_issuers) is not tuple or type(self.rules) is not tuple or not 1 <= len(self.allowed_issuers) <= 32 or not 1 <= len(self.rules) <= 32 or any(type(r) is not Rule for r in self.rules):
             raise TrustError("fail-closed policies require issuer and rule allowlists")
+        if len(set(self.allowed_issuers)) != len(self.allowed_issuers):
+            raise TrustError("duplicate allowed issuer")
         for issuer in self.allowed_issuers:
             identifier(issuer)
         if len(set(r.field for r in self.rules)) != len(self.rules):
             raise TrustError("ambiguous duplicate policy controls")
-        if not 1 <= self.max_age_seconds <= 300:
+        if type(self.max_age_seconds) is not int or not 1 <= self.max_age_seconds <= 300:
             raise TrustError("invalid policy freshness limit")
+        if type(self.require_hardware_identity) is not bool:
+            raise TrustError("invalid hardware identity policy")
+        if type(self.max_credential_age_seconds) is not int or not 1 <= self.max_credential_age_seconds <= 2592000:
+            raise TrustError("invalid credential freshness limit")
 
     def as_dict(self) -> dict[str, Any]:
         return {"policy_id": self.policy_id, "tenant": self.tenant,
                 "audience": self.audience, "purpose": self.purpose,
                 "allowed_issuers": list(self.allowed_issuers),
                 "rules": [r.as_dict() for r in self.rules],
-                "max_age_seconds": self.max_age_seconds}
+                "max_age_seconds": self.max_age_seconds,
+                "require_hardware_identity": self.require_hardware_identity,
+                "max_credential_age_seconds": self.max_credential_age_seconds}
 
     @property
     def sha256(self) -> str:
@@ -263,19 +307,26 @@ class IssuerRegistry:
 
     def __init__(self) -> None:
         self._keys: dict[tuple[str, str, str], Ed25519PublicKey] = {}
+        self._revoked: set[tuple[str, str, str]] = set()
 
     def enroll(self, tenant: str, issuer: str, key_id: str,
                public_key: Ed25519PublicKey) -> None:
         slot = (identifier(tenant), identifier(issuer), identifier(key_id))
-        if not isinstance(public_key, Ed25519PublicKey) or slot in self._keys:
+        if not isinstance(public_key, Ed25519PublicKey) or slot in self._keys or slot in self._revoked:
             raise TrustError("invalid or duplicate issuer key enrollment")
         self._keys[slot] = public_key
 
     def revoke(self, tenant: str, issuer: str, key_id: str) -> None:
-        self._keys.pop((identifier(tenant), identifier(issuer), identifier(key_id)), None)
+        slot = (identifier(tenant), identifier(issuer), identifier(key_id))
+        self._revoked.add(slot)
+        self._keys.pop(slot, None)
 
     def lookup(self, tenant: str, issuer: str, key_id: str) -> Ed25519PublicKey:
         try:
             return self._keys[(identifier(tenant), identifier(issuer), identifier(key_id))]
         except KeyError as exc:
             raise TrustError("issuer key not enrolled or revoked") from exc
+
+    def hardware_verified(self, tenant: str, issuer: str, key_id: str, *, now: int) -> bool:
+        """Software enrollment alone never establishes hardware provenance."""
+        return False

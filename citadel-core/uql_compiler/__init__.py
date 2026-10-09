@@ -1,14 +1,21 @@
-"""UQL Omniversal Compiler: verified cryptographic and quantum mechanisms."""
-from .architecture import ArchitectureDeclaration, CompilerManifest
-from .crypto import HybridCiphertext, HybridKeyExchange, HybridRecipient
-from .native_crypto import NativeKeyPair, NativeSecret
-from .memory import LockedBuffer, MemoryLockStatus
-from .qec import SurfaceCode
-from .dd import CoherenceModel, DDConfig, build_dd_pass_manager
+"""UQL modules load on demand; research imports do not initialize crypto."""
+from importlib import import_module
 
-__all__ = [
-    "ArchitectureDeclaration","CompilerManifest","HybridCiphertext",
-    "HybridKeyExchange","HybridRecipient","NativeKeyPair","NativeSecret",
-    "LockedBuffer","MemoryLockStatus","SurfaceCode","CoherenceModel",
-    "DDConfig","build_dd_pass_manager",
-]
+_EXPORTS = {
+    'architecture': ('ArchitectureDeclaration', 'CompilerManifest'),
+    'crypto': ('HybridCiphertext', 'HybridKeyExchange', 'HybridRecipient'),
+    'native_crypto': ('NativeKeyPair', 'NativeSecret'),
+    'memory': ('LockedBuffer', 'MemoryLockStatus'),
+    'qec': ('SurfaceCode',),
+    'dd': ('CoherenceModel', 'DDConfig', 'build_dd_pass_manager'),
+}
+_MODULES = {name: module for module, names in _EXPORTS.items() for name in names}
+__all__ = list(_MODULES)
+
+
+def __getattr__(name):
+    if name not in _MODULES:
+        raise AttributeError(name)
+    value = getattr(import_module(f'.{_MODULES[name]}', __name__), name)
+    globals()[name] = value
+    return value

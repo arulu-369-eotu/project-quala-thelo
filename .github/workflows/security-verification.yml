@@ -1,0 +1,47 @@
+name: Repository security and trust verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies and verify hashes
+        run: python -m pip install --require-hashes -r requirements-ci.lock
+      - name: Install local packages without dependency or build resolution
+        run: python -m pip install --no-deps --no-build-isolation -e ./citadel-core -e ./enterprise-trust-plane
+      - name: Build checksum-verified OpenSSL 3.5.8 test library
+        run: bash scripts/build_test_openssl.sh
+      - name: Crypto, quantum and trust regression tests
+        env:
+          UQL_OPENSSL_LIBRARY: ${{ github.workspace }}/.test-openssl/openssl-3.5.8/libcrypto.so.3
+        run: python -m pytest -q citadel-core/tests enterprise-trust-plane/tests
+      - name: Static security analysis
+        run: python -m bandit -r citadel-core/uql_compiler enterprise-trust-plane/src -q
+      - name: Live known-vulnerability audit
+        run: python -m pip_audit --strict --disable-pip --no-deps -r requirements-ci.lock
+      - name: Secret-pattern scan
+        run: python scripts/scan_secrets.py
+      - name: Partner smoke demo
+        run: python enterprise-trust-plane/examples/partner_demo.py
+      - name: Three-product smoke demo
+        run: python enterprise-trust-plane/examples/trust_products_demo.py

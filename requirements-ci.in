@@ -1,0 +1,10 @@
+# Audited Python 3.12 verification environment, 2026-10-09.
+pip==26.2.1
+setuptools==84.0.0
+cryptography==50.0.2
+qiskit==2.5.2
+cirq-core==1.7.0
+pytest==9.1.1
+hypothesis==6.168.5
+bandit==1.9.4
+pip-audit==2.10.1

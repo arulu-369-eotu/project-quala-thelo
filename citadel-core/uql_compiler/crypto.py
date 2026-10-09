@@ -6,10 +6,10 @@ from .native_crypto import NativeKeyPair,NativeSecret,encapsulate as _encapsulat
 class HybridCiphertext:
     data: bytes
     def __post_init__(self):
-        if len(self.data)!=1600:raise ValueError("invalid hybrid ciphertext length")
+        if type(self.data) is not bytes or len(self.data)!=1600:raise ValueError("invalid hybrid ciphertext length or type")
     def serialize(self)->bytes:return self.data
     @classmethod
-    def parse(cls,data:bytes)->"HybridCiphertext":return cls(bytes(data))
+    def parse(cls,data:bytes)->"HybridCiphertext":return cls(data)
 @dataclass
 class HybridRecipient:
     _native: NativeKeyPair
@@ -21,9 +21,14 @@ class HybridRecipient:
     def mlkem_public_bytes(self)->bytes:return self.public_bundle()[32:]
     def public_bundle(self)->bytes:return self._native.public_bundle()
     def decapsulate(self,ciphertext:HybridCiphertext,*,context:bytes=b"")->NativeSecret:return _decapsulate(self._native,ciphertext.serialize(),context)
+    def close(self)->None:self._native.close()
+    def __enter__(self)->"HybridRecipient":return self
+    def __exit__(self,*_)->None:self.close()
 class HybridKeyExchange:
     @staticmethod
     def encapsulate(recipient_x25519_public:bytes,recipient_mlkem_public:bytes,*,context:bytes=b""):
+        if type(recipient_x25519_public) is not bytes or len(recipient_x25519_public)!=32:raise ValueError("invalid X25519 public key")
+        if type(recipient_mlkem_public) is not bytes or len(recipient_mlkem_public)!=1568:raise ValueError("invalid ML-KEM public key")
         c,s=_encapsulate(recipient_x25519_public+recipient_mlkem_public,context);return HybridCiphertext(c),s
     @staticmethod
     def encapsulate_bundle(recipient_bundle:bytes,*,context:bytes=b""):
