@@ -44,6 +44,18 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: artifacts/proof369-ci.json
+      - name: Independently verify GitHub attested report with GitHub CLI
+        id: verification
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify artifacts/proof369-ci.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/proof369-attested-ci.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" --format json > artifacts/verification-result.json
+          python -c 'import json; x=json.load(open("artifacts/verification-result.json")); assert isinstance(x,list) and len(x)>0'
       - name: Preserve report for an independent verifier
         if: ${{ always() && steps.evidence.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -57,6 +69,8 @@ jobs:
         env:
           TEST_OUTCOME: ${{ steps.tests.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
         run: |
           test "$TEST_OUTCOME" = success
           test "$EVIDENCE_OUTCOME" = success
+          test "$VERIFICATION_OUTCOME" = success
