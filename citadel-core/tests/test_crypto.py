@@ -7,7 +7,7 @@ def test_native_hybrid_key_agreement():
         ct,a=HybridKeyExchange.encapsulate_bundle(recipient.public_bundle(),context=b"test")
         b=recipient.decapsulate(ct,context=b"test")
         assert a.same_as(b)
-        assert a.pointer != 0
+        assert not hasattr(a, 'pointer')
         assert HybridCiphertext.parse(ct.serialize())==ct
     finally:
         if a:a.close()
