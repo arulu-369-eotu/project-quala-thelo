@@ -81,6 +81,8 @@ A verifier operator has separately pinned PROOF and all witness public keys, its
 \`\`\`bash
 python -m quala_trust.operator verify \
   --id abraxas-west --tenant bank1 \
+  --audience procurement \
+  --challenge-hex REPLACE_WITH_64_HEX_FROM_RELYING_PARTY \
   --repo arulu-369-eotu/project-quala-thelo \
   --source-sha YOUR_EXACT_40_CHARACTER_COMMIT_SHA \
   --checkpoint-public proof-public.pem \
@@ -95,6 +97,8 @@ python -m quala_trust.operator verify \
 \`\`\`
 
 The \`source-sha\` value must be exactly the approved **40-character commit hash**; do not replace it with a floating branch name. This command will fail closed unless the check is signed, fresh, from \`main\`, witnessed by at least two distinct keys, and matches the **specific** attested CI artifact.
+
+Before requesting verification, the relying party must create a unique 32-byte cryptographically random challenge (e.g. `openssl rand -hex 32`) and persist its outstanding/consumed state. The CLI requires that challenge as 64 lowercase hex characters and binds its domain-separated SHA-256 to an **audience-scoped** signed receipt. Relying parties must verify the receipt against their originally issued challenge, consume it exactly once, enforce age limits, and reject cross-audience replay. A verifier must not create challenges on behalf of the relying party.
 
 ABRAXAS admission receipts are Ed25519-signed, **not post-quantum**. Public keys do not establish independent organizational identity by themselves; key enrollments and operator vetting are mandatory.
 
