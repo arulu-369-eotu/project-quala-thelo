@@ -1,0 +1,62 @@
+name: PROOF-369 CI Attestation
+
+on:
+  push:
+    branches:
+      - main
+      - feat/quala-enterprise-trust-exchange-20261009
+    paths:
+      - 'enterprise-trust-plane/**'
+      - '.github/workflows/proof369-attested-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  measurable-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install passport dependencies
+        run: python -m pip install -e './enterprise-trust-plane[test]'
+      - name: Execute instrumented tests
+        id: tests
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts
+          python -m pytest -q enterprise-trust-plane/tests --junitxml=artifacts/pytest.xml
+      - name: Normalize measured JUnit results
+        id: evidence
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        run: |
+          PYTHONPATH=enterprise-trust-plane/src python enterprise-trust-plane/scripts/create_ci_report.py \
+            --junit artifacts/pytest.xml \
+            --output artifacts/proof369-ci.json
+      - name: Publish authenticated GitHub provenance
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/proof369-ci.json
+      - name: Preserve report for an independent verifier
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof369-ci-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/proof369-ci.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Fail when measured tests did not succeed
+        if: ${{ always() }}
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          test "$TEST_OUTCOME" = success
+          test "$EVIDENCE_OUTCOME" = success
