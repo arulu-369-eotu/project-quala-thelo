@@ -1,0 +1,8 @@
+uql 0.2;
+program Marginal {
+    qubits 3;
+    bits 1;
+    h q[0];
+    cx q[0], q[2];
+    measure q[2] -> c[0];
+}

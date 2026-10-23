@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uql-omniversal-compiler"
-version = "1.1.0"
+version = "1.2.0.dev0"
 description = "Verified cryptographic and quantum compiler mechanisms for UQL."
 requires-python = ">=3.11"
 dependencies = [
@@ -15,10 +15,24 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
+next-test = [
+  "pytest>=8,<9",
+  "jsonschema>=4,<5",
+  "llvmlite>=0.46,<1",
+  "qiskit-qasm3-import>=0.6,<1",
+  "qirrunner>=0.9,<1; sys_platform == 'linux'",
+]
 
-[tool.setuptools]
-packages = ["uql_compiler"]
+[project.scripts]
+uql = "uql_compiler.next.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["uql_compiler*"]
+
+[tool.setuptools.package-data]
+"uql_compiler.next" = ["assets/*.jpg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
