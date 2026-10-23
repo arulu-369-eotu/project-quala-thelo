@@ -1,0 +1,39 @@
+name: UQL NEXT conformance
+
+on:
+  push:
+    paths:
+      - "citadel-core/**"
+      - "docs/uql-next/**"
+      - ".github/workflows/uql-next.yml"
+  pull_request:
+    paths:
+      - "citadel-core/**"
+      - "docs/uql-next/**"
+      - ".github/workflows/uql-next.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install reference compiler and validation adapters
+        run: python -m pip install -e './citadel-core[next-test]'
+      - name: Run UQL NEXT conformance and backend tests
+        run: python -m pytest -q citadel-core/tests/next --strict-markers
+      - name: Compile, rebuild and compare emitted targets
+        run: |
+          uql compile citadel-core/examples/bell.uql --out uql-out/bell
+          uql verify uql-out/bell
+          uql differential uql-out/bell

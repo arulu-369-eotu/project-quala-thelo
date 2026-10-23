@@ -1,0 +1,6 @@
+{
+  "source": "uql 0.2;\nprogram Bell {\n    qubits 2;\n    bits 2;\n    require qubits <= 2;\n    require depth <= 3;\n    trust reproducible;\n    h q[0];\n    cx q[0], q[1];\n    measure q[0] -> c[0];\n    measure q[1] -> c[1];\n}\n",
+  "canonical_ir": "{\"bits\":2,\"name\":\"Bell\",\"operations\":[{\"gate\":\"h\",\"qubits\":[0]},{\"gate\":\"cx\",\"qubits\":[0,1]},{\"bit\":0,\"gate\":\"measure\",\"qubits\":[0]},{\"bit\":1,\"gate\":\"measure\",\"qubits\":[1]}],\"qubits\":2,\"requirements\":{\"depth\":3,\"qubits\":2},\"schema\":\"uql.ir/0.2\",\"trust\":[\"reproducible\"]}\n",
+  "ir_digest": "ce76cb690f8fd03fdc1ae81cb5313f9f27cd1fd9f88b58c8451e6fdabb337400",
+  "circuit_digest": "413ca08d7ae2918ad6aa0706cfcd6cc959f55354194d7f27ca987c36ceed6cb6"
+}
