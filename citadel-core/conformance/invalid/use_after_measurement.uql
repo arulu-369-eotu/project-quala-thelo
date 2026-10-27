@@ -1,0 +1,7 @@
+uql 0.2;
+program Invalid {
+    qubits 1;
+    bits 1;
+    measure q[0] -> c[0];
+    h q[0];
+}

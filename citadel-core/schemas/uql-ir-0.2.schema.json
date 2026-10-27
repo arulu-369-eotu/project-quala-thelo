@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:eotu:uql:ir:0.2",
+  "title": "UQL NEXT AST and IR 0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "qubits",
+    "bits",
+    "operations",
+    "requirements",
+    "trust"
+  ],
+  "properties": {
+    "schema": {
+      "const": "uql.ir/0.2"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    },
+    "qubits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096
+    },
+    "bits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "qubits"
+            ],
+            "properties": {
+              "gate": {
+                "enum": [
+                  "h",
+                  "x",
+                  "y",
+                  "z",
+                  "s",
+                  "t"
+                ]
+              },
+              "qubits": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "qubits"
+            ],
+            "properties": {
+              "gate": {
+                "enum": [
+                  "cx",
+                  "cz"
+                ]
+              },
+              "qubits": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "qubits",
+              "phase"
+            ],
+            "properties": {
+              "gate": {
+                "enum": [
+                  "rz"
+                ]
+              },
+              "qubits": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                }
+              },
+              "phase": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "numerator",
+                  "denominator"
+                ],
+                "properties": {
+                  "numerator": {
+                    "type": "integer",
+                    "minimum": -1000000000000,
+                    "maximum": 1000000000000
+                  },
+                  "denominator": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "qubits",
+              "bit"
+            ],
+            "properties": {
+              "gate": {
+                "enum": [
+                  "measure"
+                ]
+              },
+              "qubits": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                }
+              },
+              "bit": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4095
+              }
+            }
+          }
+        ]
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "qubits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "gates": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "two_qubit_gates": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        }
+      }
+    },
+    "trust": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 4,
+      "items": {
+        "enum": [
+          "reproducible",
+          "signed_compiler",
+          "attested_backend",
+          "independent_verifier"
+        ]
+      }
+    }
+  }
+}
