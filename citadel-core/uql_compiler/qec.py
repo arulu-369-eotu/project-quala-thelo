@@ -57,20 +57,19 @@ class SurfaceCode:
                         ((r, c), (r, c + 1), (r + 1, c), (r + 1, c + 1)),
                     ))
 
+        # Alternating boundary half-plaquettes preserve X/Z commutation.
         if kind == "X":
-            for r in range(0, self.distance - 1, 2):
-                checks.append(Stabilizer(kind, ((r, 0), (r + 1, 0))))
-            for r in range(1, self.distance - 1, 2):
-                checks.append(Stabilizer(
-                    kind, ((r, self.distance - 1), (r + 1, self.distance - 1))
-                ))
-        else:
             for c in range(0, self.distance - 1, 2):
                 checks.append(Stabilizer(kind, ((0, c), (0, c + 1))))
             for c in range(1, self.distance - 1, 2):
-                checks.append(Stabilizer(
-                    kind, ((self.distance - 1, c), (self.distance - 1, c + 1))
-                ))
+                checks.append(Stabilizer(kind, ((self.distance - 1, c),
+                                               (self.distance - 1, c + 1))))
+        else:
+            for r in range(1, self.distance - 1, 2):
+                checks.append(Stabilizer(kind, ((r, 0), (r + 1, 0))))
+            for r in range(0, self.distance - 1, 2):
+                checks.append(Stabilizer(kind, ((r, self.distance - 1),
+                                               (r + 1, self.distance - 1))))
 
         return tuple(checks)
 

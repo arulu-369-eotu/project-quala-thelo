@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   test:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +28,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: citadel-core/pyproject.toml
+      # The host libcrypto can be older than ML-KEM. Keep all three Python
+      # versions and use an isolated, commit-pinned OpenSSL rather than skipping
+      # native tests or replacing the host's security libraries.
+      - name: Build isolated OpenSSL with ML-KEM support
+        env:
+          OPENSSL_COMMIT: c1eeb9406b6142148f267594197d853403d10208
+        run: |
+          git clone --depth 1 --branch openssl-3.5.4 https://github.com/openssl/openssl.git "$RUNNER_TEMP/uql-openssl-src"
+          test "$(git -C "$RUNNER_TEMP/uql-openssl-src" rev-parse HEAD)" = "$OPENSSL_COMMIT"
+          cd "$RUNNER_TEMP/uql-openssl-src"
+          ./Configure --prefix="$RUNNER_TEMP/uql-openssl" --libdir=lib shared no-tests
+          make -j2 build_sw
+          make install_sw
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/uql-openssl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "OPENSSL_MODULES=$RUNNER_TEMP/uql-openssl/lib/ossl-modules" >> "$GITHUB_ENV"
+      - name: Assert native ML-KEM support
+        run: |
+          "$RUNNER_TEMP/uql-openssl/bin/openssl" version
+          "$RUNNER_TEMP/uql-openssl/bin/openssl" list -kem-algorithms | grep -F 'ML-KEM-1024'
       - name: Install package and tests
         run: python -m pip install -e "./citadel-core[test]"
       - name: Run tests

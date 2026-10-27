@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from qiskit.circuit import QuantumCircuit
+from qiskit.circuit import Delay, QuantumCircuit
 from qiskit.circuit.library import XGate
 from qiskit.transpiler import InstructionDurations, PassManager
 from qiskit.transpiler.passes import ALAPScheduleAnalysis, PadDynamicalDecoupling
@@ -67,6 +67,24 @@ def uhrig_spacings(pulse_count: int) -> tuple[float, ...]:
     )
 
 
+class _RatioAwareDD(PadDynamicalDecoupling):
+    """Retain the configured idle/sequence ratio on Qiskit's single-sequence API."""
+
+    def __init__(self, durations, sequence, *, spacing, min_idle_ratio):
+        super().__init__(durations, sequence, spacing=spacing)
+        self._uql_durations = durations
+        self._uql_min_idle_ratio = min_idle_ratio
+
+    def _pad(self, dag, qubit, t_start, t_end, next_node, prev_node):
+        # This profile is restricted to XX. Use calibrated per-qubit durations,
+        # not the local default x_pulse_dt, when the caller supplies durations.
+        sequence_dt = 2 * self._uql_durations.get("x", dag.find_bit(qubit).index, "dt")
+        if t_end - t_start < self._uql_min_idle_ratio * sequence_dt:
+            self._apply_scheduled_op(dag, t_start, Delay(t_end - t_start, "dt"), qubit)
+            return
+        super()._pad(dag, qubit, t_start, t_end, next_node, prev_node)
+
+
 def build_dd_pass_manager(
     coherence: CoherenceModel,
     *,
@@ -95,11 +113,11 @@ def build_dd_pass_manager(
 
     return PassManager([
         ALAPScheduleAnalysis(durations),
-        PadDynamicalDecoupling(
+        _RatioAwareDD(
             durations,
             [XGate(), XGate()],
-            spacings=uhrig_spacings(pulse_count),
-            sequence_min_length_ratios=config.min_idle_ratio,
+            spacing=list(uhrig_spacings(pulse_count)),
+            min_idle_ratio=config.min_idle_ratio,
         ),
     ])
 
